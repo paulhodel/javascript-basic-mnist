@@ -3,6 +3,9 @@
  *
  * Architecture: 784 -> 16 -> 16 -> 10
  *
+ * Features:
+ *   ✓ Input normalization (z-score)
+ *
  * TODO:
  *   - Bias terms
  *   - Batch normalization
@@ -26,6 +29,20 @@ import {
 
 // Hyperparameters
 const learningRate = 0.01;
+
+// Normalization statistics (calculated from MNIST training set)
+// MNIST pixel values are in [0, 1] after division by 255
+const PIXEL_MEAN = 0.1307; // Mean pixel value for MNIST
+const PIXEL_STD = 0.3081;  // Standard deviation for MNIST
+
+/**
+ * Normalize pixel values using z-score normalization
+ * Formula: (x - mean) / std
+ * This centers the data around 0 and scales to unit variance
+ */
+function normalizePixels(pixels) {
+    return pixels.map(pixel => (pixel - PIXEL_MEAN) / PIXEL_STD);
+}
 
 function loadWeights() {
     let w = {};
@@ -67,10 +84,14 @@ function run(w, position) {
         let target = new Array(10).fill(0);
         target[image.label] = 1;
 
+        // ========== NORMALIZATION ==========
+        // Normalize input pixels for better training stability
+        const normalizedPixels = normalizePixels(image.pixels);
+
         // ========== FORWARD PASS - Store all activations ==========
 
         // Layer 0: Input pixels (784) -> Hidden layer 1 (16 neurons) with ReLU
-        let z0 = forwardLayer(image.pixels, w[0]);  // Weighted sums before activation
+        let z0 = forwardLayer(normalizedPixels, w[0]);  // Weighted sums before activation
         let a0 = z0.map(z => relu(z));  // Activations after ReLU
 
         // Layer 1: Hidden layer 1 (16) -> Hidden layer 2 (16 neurons) with ReLU
@@ -135,7 +156,7 @@ function run(w, position) {
         // Accumulate weight gradients for layer 0: dL/dw0 = dz0 * input^T
         for (let i = 0; i < w[0].length; i++) {  // For each neuron (16)
             for (let j = 0; j < w[0][i].length; j++) {  // For each input pixel (784)
-                weightGradients[0][i][j] += dz0[i] * image.pixels[j];
+                weightGradients[0][i][j] += dz0[i] * normalizedPixels[j];
             }
         }
     });
