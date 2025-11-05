@@ -53,13 +53,20 @@ This will evaluate the trained model on test images and show predictions.
 ## Example Output
 
 ```
-Batch 0 - Loss: 2.3026, Accuracy: 10.0% (1/10)
-Batch 1 - Loss: 2.2891, Accuracy: 20.0% (2/10)
-...
+Batch 990 - Loss: 0.0344, Accuracy: 100.0% (10/10)
+Batch 991 - Loss: 0.1439, Accuracy: 100.0% (10/10)
+Batch 992 - Loss: 0.2650, Accuracy: 90.0% (9/10)
+Batch 993 - Loss: 0.2535, Accuracy: 100.0% (10/10)
+Batch 994 - Loss: 0.6497, Accuracy: 80.0% (8/10)
+Batch 995 - Loss: 0.2757, Accuracy: 100.0% (10/10)
+Batch 996 - Loss: 0.1965, Accuracy: 100.0% (10/10)
+Batch 997 - Loss: 0.6101, Accuracy: 80.0% (8/10)
+Batch 998 - Loss: 0.2125, Accuracy: 90.0% (9/10)
+Batch 999 - Loss: 0.2009, Accuracy: 100.0% (10/10)
 ============================================================
-Progress: 10/1000 (1.0%)
-Last 10 batches - Avg Loss: 2.1234, Avg Accuracy: 35.5%
-Loss Range: 2.0123 - 2.2456
+Progress: 1000/1000 (100.0%)
+Last 10 batches - Avg Loss: 0.2842, Avg Accuracy: 94.0%
+Loss Range: 0.0344 - 0.6497
 ============================================================
 ```
 
