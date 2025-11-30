@@ -191,34 +191,87 @@ function main() {
     const reportInterval = 10; // Report progress every 10 batches
     let recentMetrics = [];
 
-    console.log(`Starting training for ${totalBatches} batches...`);
-    console.log('=' .repeat(60));
+    // Performance tracking
+    let totalImagesProcessed = 0;
+    let totalTimeMs = 0;
+    const startTime = Date.now();
+
+    console.log('=' .repeat(70));
+    console.log('CPU MNIST TRAINING');
+    console.log('=' .repeat(70));
+    console.log(`Total batches: ${totalBatches}`);
+    console.log(`Batch size: 10 images`);
+    console.log(`Total images: ${totalBatches * 10}`);
+    console.log('=' .repeat(70));
+    console.log('');
 
     for (let i = 0; i < totalBatches; i++) {
+        const batchStartTime = Date.now();
         const metrics = run(w, i);
-        recentMetrics.push(metrics);
+        const batchEndTime = Date.now();
+
+        const batchTimeMs = batchEndTime - batchStartTime;
+        const imagesPerSecond = (10 / batchTimeMs) * 1000;
+
+        totalImagesProcessed += 10;
+        totalTimeMs += batchTimeMs;
+
+        recentMetrics.push({
+            ...metrics,
+            batchTimeMs,
+            imagesPerSecond
+        });
+
+        // Print batch results with performance metrics
+        console.log(
+            `Batch ${String(i).padStart(4, ' ')} | ` +
+            `Loss: ${metrics.loss.toFixed(4)} | ` +
+            `Acc: ${metrics.accuracy.toFixed(1)}% | ` +
+            `Time: ${batchTimeMs.toFixed(0)}ms | ` +
+            `Speed: ${imagesPerSecond.toFixed(1)} img/s`
+        );
 
         // Print summary every reportInterval batches
         if ((i + 1) % reportInterval === 0) {
             const avgLoss = recentMetrics.reduce((a, b) => a + b.loss, 0) / recentMetrics.length;
             const avgAccuracy = recentMetrics.reduce((a, b) => a + b.accuracy, 0) / recentMetrics.length;
-            const minLoss = Math.min(...recentMetrics.map(m => m.loss));
-            const maxLoss = Math.max(...recentMetrics.map(m => m.loss));
+            const avgBatchTime = recentMetrics.reduce((a, b) => a + b.batchTimeMs, 0) / recentMetrics.length;
+            const avgSpeed = recentMetrics.reduce((a, b) => a + b.imagesPerSecond, 0) / recentMetrics.length;
             const progress = ((i + 1) / totalBatches * 100).toFixed(1);
 
-            console.log('=' .repeat(60));
-            console.log(`Progress: ${i + 1}/${totalBatches} (${progress}%)`);
-            console.log(`Last ${reportInterval} batches - Avg Loss: ${avgLoss.toFixed(4)}, Avg Accuracy: ${avgAccuracy.toFixed(1)}%`);
-            console.log(`Loss Range: ${minLoss.toFixed(4)} - ${maxLoss.toFixed(4)}`);
-            console.log('=' .repeat(60));
+            const elapsedTime = Date.now() - startTime;
+            const overallSpeed = (totalImagesProcessed / elapsedTime) * 1000;
 
-            recentMetrics = []; // Reset for next interval
+            console.log('');
+            console.log('=' .repeat(70));
+            console.log(`SUMMARY - Batches ${i - reportInterval + 2}-${i + 1} (Progress: ${progress}%)`);
+            console.log('-' .repeat(70));
+            console.log(`Avg Loss: ${avgLoss.toFixed(4)} | Avg Accuracy: ${avgAccuracy.toFixed(1)}%`);
+            console.log(`Avg Batch Time: ${avgBatchTime.toFixed(0)}ms | Avg Speed: ${avgSpeed.toFixed(1)} img/s`);
+            console.log(`Overall Speed: ${overallSpeed.toFixed(1)} img/s | Total Time: ${(elapsedTime / 1000).toFixed(1)}s`);
+            console.log('=' .repeat(70));
+            console.log('');
+
+            recentMetrics = [];
         }
     }
 
-    console.log('\nTraining complete! Saving weights...');
+    const totalTime = Date.now() - startTime;
+    const overallSpeed = (totalImagesProcessed / totalTime) * 1000;
+
+    console.log('');
+    console.log('=' .repeat(70));
+    console.log('TRAINING COMPLETE');
+    console.log('=' .repeat(70));
+    console.log(`Total images processed: ${totalImagesProcessed}`);
+    console.log(`Total time: ${(totalTime / 1000).toFixed(2)}s`);
+    console.log(`Average speed: ${overallSpeed.toFixed(1)} images/second`);
+    console.log(`Average batch time: ${(totalTime / totalBatches).toFixed(0)}ms`);
+    console.log('=' .repeat(70));
+
+    console.log('\nSaving weights to w.json...');
     fs.writeFileSync('./w.json', JSON.stringify(w, null, 4));
-    console.log('Weights saved to w.json');
+    console.log('Weights saved successfully!');
     console.log('\nRun "node test.js" to test the trained network.');
 }
 
