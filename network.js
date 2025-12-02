@@ -7,27 +7,23 @@ import {
 } from './utils.js';
 import {readMNIST} from "./images.js";
 
-Array.prototype.copy = function(target) {
-    if (!Array.isArray(target)) {
-        throw new TypeError("Target must be an array");
-    }
-    if (target.length !== this.length) {
-        throw new RangeError("Arrays must be the same length");
-    }
-
-    for (let i = 0; i < this.length; i++) {
-        target[i] = this[i];
-    }
-
-    return target; // optional: returns the modified target
-};
+// Removed Array.prototype.copy - using simple loops instead
 
 const initializeWeights = (numInputs) => {
-    // Returns an array of random weights for one neuron
+    // He initialization with Gaussian distribution
+    // Uses Box-Muller transform for true normal distribution
     const stdDev = Math.sqrt(2 / numInputs);
-    return new Array(numInputs).fill(0).map(() =>
-        (Math.random() * 2 - 1) * stdDev
-    );
+    const weights = [];
+
+    for (let i = 0; i < numInputs; i++) {
+        // Box-Muller transform to generate Gaussian random numbers
+        const u1 = Math.random();
+        const u2 = Math.random();
+        const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+        weights[i] = z * stdDev;
+    }
+
+    return weights;
 }
 
 const sumAllElements = function(A, B) {
@@ -39,7 +35,7 @@ const sumAllElements = function(A, B) {
 }
 
 const Neuron = function(previousLayer) {
-    let size = previousLayer.length;
+    let size = previousLayer.value.length;
 
     return {
         value: null,
@@ -49,7 +45,7 @@ const Neuron = function(previousLayer) {
         calculate: function(activation) {
             // Calculate value of this neuron based on the input and its weights
             this.value = this.raw = sumAllElements(this.input, this.weights);
-            // New value for this neuron
+            // Apply activation function
             if (activation) {
                 this.value = activation(this.raw);
             }
@@ -79,9 +75,10 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
     }
 
     return {
-        // Cache curren value of the neurons on this network
-        value: [],
-        error: [],
+        // Cache current value of the neurons on this network
+        // Pre-allocate arrays with correct size
+        value: new Array(numOfNeurons).fill(0),
+        error: new Array(numOfNeurons).fill(0),
         neurons: neurons,
         activation: activation,
         calculate: function() {
@@ -92,10 +89,8 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
         },
         gradient: function() {
             if (previousLayer) {
-                // Initialize previous layer errors
-                for (let j = 0; j < previousLayer.value.length; j++) {
-                    previousLayer.error[j] = 0;
-                }
+                // Initialize previous layer errors to zero
+                previousLayer.error = new Array(previousLayer.value.length).fill(0);
 
                 // Loop through all neurons
                 for (let i = 0; i < numOfNeurons; i++) {
@@ -107,18 +102,23 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
                     }
                 }
 
-                // Part 3: Apply ReLU derivative AFTER accumulation
-                for (let j = 0; j < previousLayer.neurons.length; j++) {
-                    if (previousLayer.neurons[j].raw <= 0) {
-                        previousLayer.error[j] = 0;
+                // Part 3: Apply ReLU derivative AFTER accumulation (only if previous layer has neurons)
+                if (previousLayer.neurons && previousLayer.neurons.length > 0) {
+                    for (let j = 0; j < previousLayer.neurons.length; j++) {
+                        if (previousLayer.neurons[j].raw <= 0) {
+                            previousLayer.error[j] = 0;
+                        }
                     }
                 }
             }
         },
         resetGradient: function() {
-            for (let i = 0; i < numOfNeurons; i++) {
-                for (let j = 0; j < previousLayer.value.length; j++) {
-                    weightGradient[i][j] = 0;
+            // Only reset if this layer has weights (i.e., has a previous layer)
+            if (previousLayer) {
+                for (let i = 0; i < numOfNeurons; i++) {
+                    for (let j = 0; j < previousLayer.value.length; j++) {
+                        weightGradient[i][j] = 0;
+                    }
                 }
             }
         },
@@ -128,7 +128,6 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
                 for (let j = 0; j < neurons[i].weights.length; j++) {
                     // Average the gradient
                     const avgGradient = weightGradient[i][j] / batchSize;
-
                     // Gradient descent: w_new = w_old - learning_rate * gradient
                     neurons[i].weights[j] -= learningRate * avgGradient;
                 }
@@ -158,9 +157,11 @@ const Network = function(size, activationMethod) {
             return output;
         },
         forward: function(input) {
-            // Copy the values to the first layer: input layer
-            layers[0].value.copy(input);
-            // Forward
+            // Copy input values to first layer
+            for (let i = 0; i < input.length; i++) {
+                layers[0].value[i] = input[i];
+            }
+            // Forward pass through all layers
             for (let i = 1; i < layers.length; i++) {
                 layers[i].calculate();
             }
@@ -168,7 +169,7 @@ const Network = function(size, activationMethod) {
         gradient: function(error) {
             layers[size.length-1].error = error;
 
-            // Forward
+            // Backward pass through all layers
             for (let i = size.length-1; i > 0; i--) {
                 layers[i].gradient();
             }
@@ -184,6 +185,45 @@ const Network = function(size, activationMethod) {
             for (let i = 1; i < layers.length; i++) {
                 layers[i].updateWeights(learningRate, batchSize);
             }
+        },
+        load: function(filepath) {
+            // Load weights from file if it exists
+            if (fs.existsSync(filepath)) {
+                const weights = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+
+                // Load weights for each layer (skip layer 0 - input layer has no weights)
+                for (let i = 1; i < layers.length; i++) {
+                    const layerWeights = weights[i - 1]; // weights array starts at 0, layers start at 1
+
+                    // Load weights for each neuron in this layer
+                    for (let j = 0; j < layers[i].neurons.length; j++) {
+                        layers[i].neurons[j].weights = layerWeights[j];
+                    }
+                }
+
+                console.log(`Weights loaded from ${filepath}`);
+            } else {
+                console.log(`No saved weights found at ${filepath}, using random initialization`);
+            }
+        },
+        save: function(filepath) {
+            // Save only weights to file
+            const weights = [];
+
+            // Save weights for each layer (skip layer 0 - input layer has no weights)
+            for (let i = 1; i < layers.length; i++) {
+                const layerWeights = [];
+
+                // Save weights for each neuron
+                for (let j = 0; j < layers[i].neurons.length; j++) {
+                    layerWeights.push(layers[i].neurons[j].weights);
+                }
+
+                weights.push(layerWeights);
+            }
+
+            fs.writeFileSync(filepath, JSON.stringify(weights, null, 2));
+            console.log(`Weights saved to ${filepath}`);
         }
     }
 }
@@ -208,11 +248,8 @@ function normalizePixels(pixels) {
     return pixels.map(pixel => (pixel - PIXEL_MEAN) / PIXEL_STD);
 }
 
-// Create the network
-const network = Network([784, 16, 16, 10], relu);
-
 // Run the network
-const run = function(w, position) {
+const run = function(network, position) {
     // Load batch of 10 images from MNIST dataset
     let images = readMNIST(position*10, position*10+10);
 
@@ -266,7 +303,91 @@ const run = function(w, position) {
 
     // Update weights after processing the batch
     network.updateWeights(LEARNING_RATE, images.length);
+
+    // Return metrics
+    return {
+        loss: totalLoss / images.length,
+        accuracy: (correctPredictions / images.length) * 100,
+        correct: correctPredictions,
+        total: images.length
+    };
 }
 
+const main = function() {
+    // Create the network
+    const network = Network([784, 16, 16, 10], relu);
+    // Load weights in case exist
+    network.load('./data.json');
 
+    console.log('='.repeat(70));
+    console.log('MNIST TRAINING');
+    console.log('='.repeat(70));
+    console.log(`Architecture: [784, 16, 16, 10]`);
+    console.log(`Learning rate: ${LEARNING_RATE}`);
+    console.log(`Total batches: 1000`);
+    console.log(`Batch size: 10 images`);
+    console.log('='.repeat(70));
+    console.log('');
 
+    const totalBatches = 5000;
+    const reportInterval = 500; // Report every 100 batches
+    let recentMetrics = [];
+    let allMetrics = [];
+    const startTime = Date.now();
+
+    for (let i = 0; i < totalBatches; i++) {
+        const batchStartTime = Date.now();
+        const metrics = run(network, i);
+        const batchTime = Date.now() - batchStartTime;
+
+        const metricData = { ...metrics, batchTime };
+        recentMetrics.push(metricData);
+        allMetrics.push(metricData);
+
+        // Report progress every reportInterval batches
+        if ((i + 1) % reportInterval === 0) {
+            const avgLoss = recentMetrics.reduce((sum, m) => sum + m.loss, 0) / recentMetrics.length;
+            const avgAccuracy = recentMetrics.reduce((sum, m) => sum + m.accuracy, 0) / recentMetrics.length;
+            const avgBatchTime = recentMetrics.reduce((sum, m) => sum + m.batchTime, 0) / recentMetrics.length;
+            const elapsedTime = (Date.now() - startTime) / 1000;
+            const overallSpeed = ((i + 1) * 10) / elapsedTime;
+            const progress = ((i + 1) / totalBatches * 100).toFixed(1);
+            const batchRange = `${i - reportInterval + 2}-${i + 1}`;
+
+            console.log('');
+            console.log('='.repeat(70));
+            console.log(`SUMMARY - Batches ${batchRange} (Progress: ${progress}%)`);
+            console.log('-'.repeat(70));
+            console.log(`Avg Loss: ${avgLoss.toFixed(4)} | Avg Accuracy: ${avgAccuracy.toFixed(1)}%`);
+            console.log(`Avg Batch Time: ${avgBatchTime.toFixed(0)}ms | Avg Speed: ${overallSpeed.toFixed(1)} img/s`);
+            console.log(`Overall Speed: ${overallSpeed.toFixed(1)} img/s | Total Time: ${elapsedTime.toFixed(1)}s`);
+            console.log('='.repeat(70));
+
+            recentMetrics = [];
+        }
+
+        // Save every 500 batches
+        if ((i + 1) % 500 === 0) {
+            network.save('./data.json');
+        }
+    }
+
+    const totalTime = (Date.now() - startTime) / 1000;
+    const avgBatchTime = allMetrics.reduce((sum, m) => sum + m.batchTime, 0) / allMetrics.length;
+
+    console.log('');
+    console.log('');
+    console.log('='.repeat(70));
+    console.log('TRAINING COMPLETE');
+    console.log('='.repeat(70));
+    console.log(`Total images processed: ${totalBatches * 10}`);
+    console.log(`Total time: ${totalTime.toFixed(2)}s`);
+    console.log(`Average speed: ${(totalBatches * 10 / totalTime).toFixed(1)} images/second`);
+    console.log(`Average batch time: ${avgBatchTime.toFixed(0)}ms`);
+    console.log('='.repeat(70));
+
+    // Final save
+    network.save('./data.json');
+}
+
+main();
