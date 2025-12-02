@@ -1,13 +1,10 @@
 import fs from 'fs';
-import { GPU } from 'gpu.js';
 import {
     crossEntropyLoss,
     relu,
     softmax
 } from './utils.js';
 import {readMNIST} from "./images.js";
-
-// Removed Array.prototype.copy - using simple loops instead
 
 const initializeWeights = (numInputs) => {
     // He initialization with Gaussian distribution
@@ -43,7 +40,7 @@ const Neuron = function(previousLayer) {
         input: previousLayer.value,
         weights: initializeWeights(size),
         calculate: function(activation) {
-            // Calculate value of this neuron based on the input and its weights
+            // GPU dot product
             this.value = this.raw = sumAllElements(this.input, this.weights);
             // Apply activation function
             if (activation) {
@@ -67,18 +64,14 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
     // weightGradient[neuronIndex][inputIndex]
     // Shape: [numOfNeurons][numInputsPerNeuron]
     const weightGradient = [];
-    if (previousLayer) {
-        const numInputs = previousLayer.value.length;
-        for (let i = 0; i < numOfNeurons; i++) {
-            weightGradient[i] = new Array(numInputs).fill(0);
-        }
-    }
 
-    return {
-        // Cache current value of the neurons on this network
-        // Pre-allocate arrays with correct size
-        value: new Array(numOfNeurons).fill(0),
-        error: new Array(numOfNeurons).fill(0),
+
+    const value = new Array(numOfNeurons).fill(0);
+    const error = new Array(numOfNeurons).fill(0);
+
+    const layer = {
+        value: value,
+        error: error,
         neurons: neurons,
         activation: activation,
         calculate: function() {
@@ -87,53 +80,66 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
                 this.value[j] = neurons[j].calculate(activation);
             }
         },
-        gradient: function() {
-            if (previousLayer) {
-                // Initialize previous layer errors to zero
-                previousLayer.error = new Array(previousLayer.value.length).fill(0);
-
-                // Loop through all neurons
-                for (let i = 0; i < numOfNeurons; i++) {
-                    for (let j = 0; j < previousLayer.value.length; j++) {
-                        // Part 1: Weight gradient for THIS layer
-                        weightGradient[i][j] += this.error[i] * previousLayer.value[j];
-                        // Part 2: Backpropagate error (ALWAYS add, no ReLU yet)
-                        previousLayer.error[j] += neurons[i].weights[j] * this.error[i];
-                    }
-                }
-
-                // Part 3: Apply ReLU derivative AFTER accumulation (only if previous layer has neurons)
-                if (previousLayer.neurons && previousLayer.neurons.length > 0) {
-                    for (let j = 0; j < previousLayer.neurons.length; j++) {
-                        if (previousLayer.neurons[j].raw <= 0) {
-                            previousLayer.error[j] = 0;
-                        }
-                    }
-                }
-            }
-        },
-        resetGradient: function() {
-            // Only reset if this layer has weights (i.e., has a previous layer)
-            if (previousLayer) {
-                for (let i = 0; i < numOfNeurons; i++) {
-                    for (let j = 0; j < previousLayer.value.length; j++) {
-                        weightGradient[i][j] = 0;
-                    }
-                }
-            }
-        },
         updateWeights: function(learningRate, batchSize) {
             // Update weights for all neurons in this layer
             for (let i = 0; i < numOfNeurons; i++) {
-                for (let j = 0; j < neurons[i].weights.length; j++) {
+                let weights = neurons[i].weights;
+                for (let j = 0; j < weights.length; j++) {
                     // Average the gradient
                     const avgGradient = weightGradient[i][j] / batchSize;
                     // Gradient descent: w_new = w_old - learning_rate * gradient
-                    neurons[i].weights[j] -= learningRate * avgGradient;
+                    weights[j] -= learningRate * avgGradient;
                 }
             }
         }
     }
+
+
+    if (previousLayer) {
+        const e = previousLayer.error;
+        const v = previousLayer.value;
+        const n = previousLayer.neurons;
+        const numOfInputs = v.length;
+        for (let i = 0; i < numOfNeurons; i++) {
+            weightGradient[i] = new Array(numOfInputs).fill(0);
+        }
+
+        layer.gradient = function() {
+            // Initialize previous layer errors to zero
+            for (let j = 0; j < e.length; j++) {
+                e[j] = 0;
+            }
+
+            // Loop through all neurons
+            for (let i = 0; i < numOfNeurons; i++) {
+                for (let j = 0; j < numOfInputs; j++) {
+                    // Part 1: Weight gradient for THIS layer
+                    weightGradient[i][j] += this.error[i] * v[j];
+                    // Part 2: Backpropagate error (ALWAYS add, no ReLU yet)
+                    e[j] += neurons[i].weights[j] * this.error[i];
+                }
+            }
+
+            // Part 3: Apply ReLU derivative AFTER accumulation (only if previous layer has neurons)
+            if (n) {
+                for (let j = 0; j < n.length; j++) {
+                    if (n[j].raw <= 0) {
+                        e[j] = 0;
+                    }
+                }
+            }
+        }
+
+        layer.resetGradient = function() {
+            for (let i = 0; i < numOfNeurons; i++) {
+                for (let j = 0; j < numOfInputs; j++) {
+                    weightGradient[i][j] = 0;
+                }
+            }
+        }
+    }
+
+    return layer;
 }
 
 const Network = function(size, activationMethod) {
@@ -176,7 +182,7 @@ const Network = function(size, activationMethod) {
         },
         resetGradient: function() {
             // Reset the gradient
-            for (let i = 0; i < layers.length; i++) {
+            for (let i = 1; i < layers.length; i++) {
                 layers[i].resetGradient();
             }
         },
@@ -329,8 +335,8 @@ const main = function() {
     console.log('='.repeat(70));
     console.log('');
 
-    const totalBatches = 5000;
-    const reportInterval = 500; // Report every 100 batches
+    const totalBatches = 1000;
+    const reportInterval = 100; // Report every 100 batches
     let recentMetrics = [];
     let allMetrics = [];
     const startTime = Date.now();
