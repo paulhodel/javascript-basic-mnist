@@ -173,7 +173,11 @@ const Network = function(size, activationMethod) {
             }
         },
         gradient: function(error) {
-            layers[size.length-1].error = error;
+            // Copy error values to last layer instead of replacing reference
+            const lastLayer = layers[size.length-1];
+            for (let i = 0; i < error.length; i++) {
+                lastLayer.error[i] = error[i];
+            }
 
             // Backward pass through all layers
             for (let i = size.length-1; i > 0; i--) {
@@ -250,8 +254,12 @@ const PIXEL_STD = 0.3081;  // Standard deviation for MNIST
  * Formula: (x - mean) / std
  * This centers the data around 0 and scales to unit variance
  */
+const normalizedBuffer = new Array(784);
 function normalizePixels(pixels) {
-    return pixels.map(pixel => (pixel - PIXEL_MEAN) / PIXEL_STD);
+    for (let i = 0; i < pixels.length; i++) {
+        normalizedBuffer[i] = (pixels[i] - PIXEL_MEAN) / PIXEL_STD;
+    }
+    return normalizedBuffer;
 }
 
 // Run the network
@@ -265,12 +273,17 @@ const run = function(network, position) {
     // Reset gradient
     network.resetGradient();
 
+    // Pre-allocate reusable arrays
+    const target = new Array(10).fill(0);
+    const error = new Array(10);
+
     // Process each image in the batch
     images.forEach(function (image) {
-        // Create one-hot encoded target vector
+        // Reset and set one-hot encoded target vector
         // Example: if label=3, target = [0,0,0,1,0,0,0,0,0,0]
-        let target = new Array(10).fill(0);
-        target[image.label] = 1;
+        for (let i = 0; i < 10; i++) {
+            target[i] = (i === image.label) ? 1 : 0;
+        }
 
         // ========== NORMALIZATION ==========
         // Formula: x_normalized = (x - μ) / σ
@@ -286,7 +299,14 @@ const run = function(network, position) {
 
         // Check if prediction is correct
         // Prediction is the index with the highest probability
-        const predictedLabel = output.indexOf(Math.max(...output));
+        let maxValue = output[0];
+        let predictedLabel = 0;
+        for (let i = 1; i < output.length; i++) {
+            if (output[i] > maxValue) {
+                maxValue = output[i];
+                predictedLabel = i;
+            }
+        }
         if (predictedLabel === image.label) {
             correctPredictions++;
         }
@@ -301,7 +321,9 @@ const run = function(network, position) {
         // Formula: ∂L/∂z2[i] = output[i] - target[i]
         // This is a beautiful simplification! When using softmax + cross-entropy together,
         // the derivative is just (prediction - true_label)
-        let error = output.map((prob, i) => prob - target[i]);
+        for (let i = 0; i < output.length; i++) {
+            error[i] = output[i] - target[i];
+        }
 
         // Calculate the gradient
         network.gradient(error);
