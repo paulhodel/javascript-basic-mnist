@@ -15,8 +15,22 @@ export function relu(x) {
  */
 export function softmax(arr) {
     const max = Math.max(...arr);
+
+    // Check for NaN or Infinity in inputs
+    if (!isFinite(max)) {
+        console.error('Invalid input to softmax:', arr);
+        return arr.map(() => 1 / arr.length); // Return uniform distribution
+    }
+
     const exps = arr.map(x => Math.exp(x - max)); // Subtract max for numerical stability
     const sum = exps.reduce((a, b) => a + b);
+
+    // Prevent division by zero
+    if (sum === 0 || !isFinite(sum)) {
+        console.error('Softmax sum is zero or invalid:', sum);
+        return arr.map(() => 1 / arr.length); // Return uniform distribution
+    }
+
     return exps.map(x => x / sum);
 }
 

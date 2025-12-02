@@ -28,7 +28,7 @@ const initializeWeights = (numInputs) => {
     // Standard deviation for He initialization
     // σ = sqrt(2 / n_in)
     const stdDev = Math.sqrt(2 / numInputs);
-    const weights = [];
+    const weights = new Float64Array(numInputs);
 
     for (let i = 0; i < numInputs; i++) {
         // Box-Muller transform to generate Gaussian random numbers
@@ -120,8 +120,8 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
     const weightGradient = [];
 
 
-    const value = new Array(numOfNeurons).fill(0);
-    const error = new Array(numOfNeurons).fill(0);
+    const value = new Float64Array(numOfNeurons);
+    const error = new Float64Array(numOfNeurons);
 
     const layer = {
         value: value,
@@ -178,7 +178,7 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
         const n = previousLayer.neurons;
         const numOfInputs = v.length;
         for (let i = 0; i < numOfNeurons; i++) {
-            weightGradient[i] = new Array(numOfInputs).fill(0);
+            weightGradient[i] = new Float64Array(numOfInputs);
         }
 
         /**
@@ -402,7 +402,8 @@ const Network = function(size, activationMethod) {
 
                 // Extract weights for each neuron in this layer
                 for (let j = 0; j < layers[i].neurons.length; j++) {
-                    layerWeights.push(layers[i].neurons[j].weights);
+                    // Convert Float64Array to regular array for JSON serialization
+                    layerWeights.push(Array.from(layers[i].neurons[j].weights));
                 }
 
                 weights.push(layerWeights);
@@ -427,7 +428,8 @@ const Network = function(size, activationMethod) {
 
                 // Load weights for each neuron in this layer
                 for (let j = 0; j < layers[i].neurons.length; j++) {
-                    layers[i].neurons[j].weights = layerWeights[j];
+                    // Convert regular array back to Float64Array for performance
+                    layers[i].neurons[j].weights = new Float64Array(layerWeights[j]);
                 }
             }
         }
@@ -436,14 +438,6 @@ const Network = function(size, activationMethod) {
 
 
 /** Application **/
-
-// Hyperparameters
-const LEARNING_RATE = 0.01;
-
-// Normalization statistics (calculated from MNIST training set)
-// MNIST pixel values are in [0, 1] after division by 255
-const PIXEL_MEAN = 0.1307; // Mean pixel value for MNIST
-const PIXEL_STD = 0.3081;  // Standard deviation for MNIST
 
 /**
  * Normalize pixel values using z-score normalization (standardization)
@@ -465,13 +459,25 @@ const PIXEL_STD = 0.3081;  // Standard deviation for MNIST
  * @param {Array<number>} pixels - Raw pixel values [0, 1]
  * @returns {Array<number>} Normalized pixel values
  */
-const normalizedBuffer = new Array(784);
+const normalizedBuffer = new Float64Array(784);
+
 function normalizePixels(pixels) {
     for (let i = 0; i < 784; i++) {
         normalizedBuffer[i] = (pixels[i] - PIXEL_MEAN) / PIXEL_STD;
     }
     return normalizedBuffer;
 }
+
+
+// Hyperparameters
+const LEARNING_RATE = 0.005;
+const BATCH_SIZE = 20;  // Number of images per mini-batch
+
+// Normalization statistics (calculated from MNIST training set)
+// MNIST pixel values are in [0, 1] after division by 255
+const PIXEL_MEAN = 0.1307; // Mean pixel value for MNIST
+const PIXEL_STD = 0.3081;  // Standard deviation for MNIST
+
 
 /**
  * Train network on a mini-batch of images
@@ -494,8 +500,19 @@ function normalizePixels(pixels) {
  * @returns {Object} Training metrics: {loss, accuracy, correct, total}
  */
 const run = function(network, position) {
-    // Load batch of 10 images from MNIST dataset
-    let images = readMNIST(position*10, position*10+10);
+    // Load batch of images from MNIST dataset
+    const startIdx = position * BATCH_SIZE;
+    let images = readMNIST(startIdx, startIdx + BATCH_SIZE);
+
+    // Skip if no images available (past end of dataset)
+    if (images.length === 0) {
+        return {
+            loss: 0,
+            accuracy: 0,
+            correct: 0,
+            total: 0
+        };
+    }
 
     let totalLoss = 0;
     let correctPredictions = 0;
@@ -503,9 +520,9 @@ const run = function(network, position) {
     // Reset accumulated gradients from previous batch
     network.resetGradient();
 
-    // Pre-allocate reusable arrays (performance optimization)
-    const target = new Array(10).fill(0);  // One-hot encoded label
-    const error = new Array(10);           // Error gradient
+    // Pre-allocate reusable arrays (performance optimization with typed arrays)
+    const target = new Float64Array(10);  // One-hot encoded label
+    const error = new Float64Array(10);   // Error gradient
 
     // Process each image in the batch
     for (let imgIdx = 0; imgIdx < images.length; imgIdx++) {
@@ -593,9 +610,9 @@ const main = function() {
     const filepath = './data.json';
 
     // Create the network
-    const network = Network([784, 16, 16, 10], relu);
+    const network = Network([784, 64, 64, 64, 10], relu);
 
-    const totalBatches = 10000;
+    const totalBatches = Math.floor(60000 / BATCH_SIZE);  // MNIST has 60,000 training images
 
     // Load saved state if it exists
     let startBatch = 0;
@@ -634,7 +651,7 @@ const main = function() {
     console.log(`Architecture: [784, 16, 16, 10]`);
     console.log(`Learning rate: ${LEARNING_RATE}`);
     console.log(`Total batches: ${totalBatches}`);
-    console.log(`Batch size: 10 images`);
+    console.log(`Batch size: ${BATCH_SIZE} images`);
     console.log(`Starting batch: ${startBatch}`);
     console.log(`Remaining batches: ${totalBatches - startBatch}`);
     console.log('='.repeat(70));
@@ -659,7 +676,7 @@ const main = function() {
             const avgAccuracy = recentMetrics.reduce((sum, m) => sum + m.accuracy, 0) / recentMetrics.length;
             const avgBatchTime = recentMetrics.reduce((sum, m) => sum + m.batchTime, 0) / recentMetrics.length;
             const elapsedTime = (Date.now() - startTime) / 1000;
-            const overallSpeed = ((i + 1) * 10) / elapsedTime;
+            const overallSpeed = ((i + 1) * BATCH_SIZE) / elapsedTime;
             const progress = ((i + 1) / totalBatches * 100).toFixed(1);
             const batchRange = `${i - reportInterval + 2}-${i + 1}`;
 
@@ -694,9 +711,9 @@ const main = function() {
     console.log('='.repeat(70));
     console.log('TRAINING COMPLETE');
     console.log('='.repeat(70));
-    console.log(`Total images processed: ${(totalBatches - startBatch) * 10}`);
+    console.log(`Total images processed: ${(totalBatches - startBatch) * BATCH_SIZE}`);
     console.log(`Total time: ${totalTime.toFixed(2)}s`);
-    console.log(`Average speed: ${((totalBatches - startBatch) * 10 / totalTime).toFixed(1)} images/second`);
+    console.log(`Average speed: ${((totalBatches - startBatch) * BATCH_SIZE / totalTime).toFixed(1)} images/second`);
     console.log(`Average batch time: ${avgBatchTime.toFixed(0)}ms`);
     console.log('='.repeat(70));
 
