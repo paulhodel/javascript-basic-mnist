@@ -6,47 +6,101 @@ import {
 } from './utils.js';
 import {readMNIST} from "./images.js";
 
+/**
+ * Initialize weights using He initialization (Kaiming initialization)
+ *
+ * He initialization is specifically designed for layers with ReLU activation.
+ * It helps prevent vanishing/exploding gradients by scaling weights appropriately.
+ *
+ * Formula: w ~ N(0, sqrt(2/n_in))
+ * Where:
+ *   - w = weight value
+ *   - N(μ, σ) = Normal distribution with mean μ and std deviation σ
+ *   - n_in = number of input connections to the neuron
+ *
+ * The factor of 2 in the numerator accounts for ReLU's property of zeroing out
+ * half the neurons on average, which would otherwise halve the variance.
+ *
+ * @param {number} numInputs - Number of inputs to the neuron
+ * @returns {Array<number>} Array of initialized weights
+ */
 const initializeWeights = (numInputs) => {
-    // He initialization with Gaussian distribution
-    // Uses Box-Muller transform for true normal distribution
+    // Standard deviation for He initialization
+    // σ = sqrt(2 / n_in)
     const stdDev = Math.sqrt(2 / numInputs);
     const weights = [];
 
     for (let i = 0; i < numInputs; i++) {
         // Box-Muller transform to generate Gaussian random numbers
+        // Converts uniform random numbers to normally distributed values
+        // Formula: z = sqrt(-2*ln(u1)) * cos(2*π*u2)
+        // Where u1, u2 ~ U(0,1) (uniform distribution)
         const u1 = Math.random();
         const u2 = Math.random();
         const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+
+        // Scale by standard deviation to get N(0, σ)
         weights[i] = z * stdDev;
     }
 
     return weights;
 }
 
-const sumAllElements = function(A, B) {
-    let sum = 0;
-    for (let i = 0; i < A.length; i++) {
-        sum += A[i] * B[i];
-    }
-    return sum;
-}
-
+/**
+ * Create a single neuron in a neural network layer
+ *
+ * A neuron performs a weighted sum of its inputs followed by an activation function.
+ * This is the fundamental building block of a neural network.
+ *
+ * Forward propagation formula:
+ *   z = Σ(w_i * x_i) for i=0 to n-1
+ *   a = f(z)
+ *
+ * Where:
+ *   - z = pre-activation value (raw weighted sum)
+ *   - w_i = weight for input i
+ *   - x_i = input value i
+ *   - a = activation value (output after applying activation function)
+ *   - f = activation function (e.g., ReLU, sigmoid)
+ *   - n = number of inputs
+ *
+ * @param {Object} previousLayer - The layer that feeds into this neuron
+ * @returns {Object} Neuron object with calculate method
+ */
 const Neuron = function(previousLayer) {
     let size = previousLayer.value.length;
+    let input = previousLayer.value; // Reference to previous layer's output
 
     return {
-        value: null,
-        raw: null,
-        input: previousLayer.value,
-        weights: initializeWeights(size),
+        value: null,     // Post-activation value: a = f(z)
+        raw: null,       // Pre-activation value: z = Σ(w_i * x_i)
+        input: input,    // Reference to input values
+        weights: initializeWeights(size), // Weight vector [w_0, w_1, ..., w_n]
+
+        /**
+         * Calculate neuron output via forward propagation
+         *
+         * Step 1: Compute weighted sum (dot product)
+         *   z = w·x = Σ(w_i * x_i)
+         *
+         * Step 2: Apply activation function
+         *   a = f(z)
+         *
+         * @param {Function} activation - Activation function to apply (optional)
+         * @returns {number} The neuron's output value
+         */
         calculate: function(activation) {
-            // GPU dot product
-            this.value = this.raw = sumAllElements(this.input, this.weights);
-            // Apply activation function
-            if (activation) {
-                this.value = activation(this.raw);
+            // Compute dot product: z = w·x
+            // Inlined for performance (avoids function call overhead)
+            let sum = 0;
+            for (let i = 0; i < size; i++) {
+                sum += input[i] * this.weights[i];
             }
-            return this.value;
+            this.raw = sum; // Store pre-activation for backprop
+
+            // Apply activation function if provided: a = f(z)
+            // Otherwise use identity function: a = z
+            return this.value = activation ? activation(sum) : sum;
         }
     }
 }
@@ -80,15 +134,38 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
                 this.value[j] = neurons[j].calculate(activation);
             }
         },
+        /**
+         * Update weights using gradient descent
+         *
+         * Gradient descent adjusts weights to minimize the loss function.
+         * For mini-batch gradient descent, we average gradients across the batch.
+         *
+         * Update rule:
+         *   w_new = w_old - α * (1/m) * Σ(∇w)
+         *
+         * Where:
+         *   - w = weight value
+         *   - α = learning rate (step size)
+         *   - m = batch size (number of examples in mini-batch)
+         *   - Σ(∇w) = sum of gradients across batch (weightGradient)
+         *   - (1/m) * Σ(∇w) = average gradient
+         *
+         * The negative sign moves weights in the direction opposite to the gradient,
+         * which is the direction of steepest descent (reduces loss).
+         *
+         * @param {number} learningRate - Step size for gradient descent (α)
+         * @param {number} batchSize - Number of examples in the mini-batch (m)
+         */
         updateWeights: function(learningRate, batchSize) {
-            // Update weights for all neurons in this layer
+            // Pre-calculate 1/batchSize to avoid division in inner loop
+            // Convert division to multiplication (faster operation)
+            const invBatchSize = 1 / batchSize;
+
             for (let i = 0; i < numOfNeurons; i++) {
                 let weights = neurons[i].weights;
                 for (let j = 0; j < weights.length; j++) {
-                    // Average the gradient
-                    const avgGradient = weightGradient[i][j] / batchSize;
-                    // Gradient descent: w_new = w_old - learning_rate * gradient
-                    weights[j] -= learningRate * avgGradient;
+                    // Gradient descent update: w = w - α * (1/m) * Σ(∇w)
+                    weights[j] -= learningRate * (weightGradient[i][j] * invBatchSize);
                 }
             }
         }
@@ -104,32 +181,80 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
             weightGradient[i] = new Array(numOfInputs).fill(0);
         }
 
+        /**
+         * Compute gradients via backpropagation
+         *
+         * Backpropagation computes how the loss changes with respect to each weight
+         * by applying the chain rule from calculus.
+         *
+         * For a neuron in layer L:
+         *   δ^L = error signal for layer L (gradient of loss w.r.t. pre-activation)
+         *   a^(L-1) = activation from previous layer
+         *   w^L = weights of current layer
+         *
+         * STEP 1: Compute weight gradients for THIS layer
+         *   ∂Loss/∂w_ij = δ^L_i * a^(L-1)_j
+         *
+         *   Where:
+         *     - i = index of neuron in current layer
+         *     - j = index of input from previous layer
+         *     - δ^L_i = error signal for neuron i (this.error[i])
+         *     - a^(L-1)_j = activation from previous layer (v[j])
+         *
+         * STEP 2: Backpropagate error to previous layer
+         *   δ^(L-1)_j = Σ(w_ij * δ^L_i) for all i in current layer
+         *
+         *   This computes how much each neuron in the previous layer
+         *   contributed to the error (before applying activation derivative).
+         *
+         * STEP 3: Apply activation function derivative
+         *   For ReLU: f'(z) = 1 if z > 0, else 0
+         *
+         *   Final error: δ^(L-1)_j = δ^(L-1)_j * f'(z^(L-1)_j)
+         *
+         *   Note: We apply this AFTER accumulating all errors to handle
+         *   the case where multiple neurons feed into the same previous neuron.
+         */
         layer.gradient = function() {
-            // Initialize previous layer errors to zero
+            // Reset previous layer errors to zero before accumulation
             for (let j = 0; j < e.length; j++) {
                 e[j] = 0;
             }
 
-            // Loop through all neurons
+            // Backpropagation: compute gradients and propagate errors
             for (let i = 0; i < numOfNeurons; i++) {
                 for (let j = 0; j < numOfInputs; j++) {
-                    // Part 1: Weight gradient for THIS layer
+                    // STEP 1: Weight gradient for THIS layer
+                    // ∂Loss/∂w_ij = δ^L_i * a^(L-1)_j
                     weightGradient[i][j] += this.error[i] * v[j];
-                    // Part 2: Backpropagate error (ALWAYS add, no ReLU yet)
+
+                    // STEP 2: Backpropagate error to previous layer
+                    // δ^(L-1)_j += w_ij * δ^L_i
                     e[j] += neurons[i].weights[j] * this.error[i];
                 }
             }
 
-            // Part 3: Apply ReLU derivative AFTER accumulation (only if previous layer has neurons)
+            // STEP 3: Apply ReLU derivative (only for hidden layers with neurons)
+            // ReLU'(z) = 1 if z > 0, else 0
+            // If z ≤ 0, set error to 0 (gradient doesn't flow through dead neurons)
             if (n) {
                 for (let j = 0; j < n.length; j++) {
                     if (n[j].raw <= 0) {
-                        e[j] = 0;
+                        e[j] = 0; // Zero gradient when ReLU is inactive
                     }
                 }
             }
         }
 
+        /**
+         * Reset accumulated gradients to zero
+         *
+         * In mini-batch gradient descent, we accumulate gradients across
+         * multiple training examples before updating weights. After updating,
+         * we must reset gradients to zero for the next batch.
+         *
+         * This should be called at the start of each mini-batch.
+         */
         layer.resetGradient = function() {
             for (let i = 0; i < numOfNeurons; i++) {
                 for (let j = 0; j < numOfInputs; j++) {
@@ -142,44 +267,107 @@ const Layer = function(numOfNeurons, previousLayer, activation) {
     return layer;
 }
 
+/**
+ * Create a feedforward neural network
+ *
+ * A feedforward neural network consists of layers of neurons where information
+ * flows from input to output without cycles. Training uses backpropagation
+ * and gradient descent to adjust weights.
+ *
+ * Network architecture:
+ *   Input Layer → Hidden Layer(s) → Output Layer
+ *
+ * @param {Array<number>} size - Array defining network architecture
+ *                               e.g., [784, 128, 10] = 784 inputs, 128 hidden, 10 outputs
+ * @param {Function} activationMethod - Activation function for hidden layers (e.g., ReLU)
+ * @returns {Object} Network object with training and inference methods
+ */
 const Network = function(size, activationMethod) {
     const layers = [];
 
+    // Create all layers
+    // Hidden layers use the specified activation function
+    // Output layer uses no activation (raw logits for softmax)
     for (let i = 0; i < size.length; i++) {
-        // Activation
+        // All layers except output use activation function
         let activation = i < size.length - 1 ? activationMethod : null;
-        // New layer
         layers.push(Layer(size[i], layers[i-1], activation))
     }
 
     return {
         layers: layers,
+
+        /**
+         * Get network output, optionally applying a transformation
+         *
+         * @param {Function} convert - Optional function to apply (e.g., softmax)
+         * @returns {Array<number>} Network output values
+         */
         output: function(convert) {
             let output = layers[size.length-1].value;
             if (convert) {
-                // Apply softmax for example
+                // Apply transformation (e.g., softmax for probabilities)
                 output = convert(output);
             }
             return output;
         },
+
+        /**
+         * Forward propagation: compute network output from input
+         *
+         * Passes input through each layer sequentially:
+         *   Layer 0 (input) → Layer 1 (hidden) → ... → Layer L (output)
+         *
+         * Each layer computes:
+         *   z^l = W^l · a^(l-1) + b^l
+         *   a^l = f(z^l)
+         *
+         * Where:
+         *   - z^l = pre-activation (weighted sum)
+         *   - W^l = weight matrix for layer l
+         *   - a^(l-1) = activations from previous layer
+         *   - b^l = bias (implicit, set to 0 in this implementation)
+         *   - f = activation function
+         *   - a^l = post-activation output
+         *
+         * @param {Array<number>} input - Input vector (e.g., flattened image)
+         */
         forward: function(input) {
-            // Copy input values to first layer
+            // Set input layer values
             for (let i = 0; i < input.length; i++) {
                 layers[0].value[i] = input[i];
             }
-            // Forward pass through all layers
+
+            // Propagate through remaining layers
             for (let i = 1; i < layers.length; i++) {
                 layers[i].calculate();
             }
         },
+
+        /**
+         * Backpropagation: compute gradients from output error
+         *
+         * Computes gradient of loss with respect to each weight by
+         * propagating errors backward through the network using chain rule.
+         *
+         * Process:
+         *   1. Start with output layer error: δ^L
+         *   2. For each layer L to 1 (backward):
+         *      a. Compute weight gradients: ∂Loss/∂W^l
+         *      b. Propagate error to previous layer: δ^(l-1)
+         *
+         * The error signal δ^l represents ∂Loss/∂z^l (gradient w.r.t. pre-activation)
+         *
+         * @param {Array<number>} error - Error gradient from loss function (δ^L)
+         */
         gradient: function(error) {
-            // Copy error values to last layer instead of replacing reference
+            // Copy error values to last layer (avoid reference replacement)
             const lastLayer = layers[size.length-1];
             for (let i = 0; i < error.length; i++) {
                 lastLayer.error[i] = error[i];
             }
 
-            // Backward pass through all layers
+            // Backpropagate through all layers (excluding input layer)
             for (let i = size.length-1; i > 0; i--) {
                 layers[i].gradient();
             }
@@ -196,35 +384,23 @@ const Network = function(size, activationMethod) {
                 layers[i].updateWeights(learningRate, batchSize);
             }
         },
-        load: function(filepath) {
-            // Load weights from file if it exists
-            if (fs.existsSync(filepath)) {
-                const weights = JSON.parse(fs.readFileSync(filepath, 'utf8'));
-
-                // Load weights for each layer (skip layer 0 - input layer has no weights)
-                for (let i = 1; i < layers.length; i++) {
-                    const layerWeights = weights[i - 1]; // weights array starts at 0, layers start at 1
-
-                    // Load weights for each neuron in this layer
-                    for (let j = 0; j < layers[i].neurons.length; j++) {
-                        layers[i].neurons[j].weights = layerWeights[j];
-                    }
-                }
-
-                console.log(`Weights loaded from ${filepath}`);
-            } else {
-                console.log(`No saved weights found at ${filepath}, using random initialization`);
-            }
-        },
-        save: function(filepath) {
-            // Save only weights to file
+        /**
+         * Get all network weights
+         *
+         * Extracts weights from all layers (excluding input layer which has no weights).
+         * Returns a nested array structure that can be saved to disk.
+         *
+         * @returns {Array<Array<Array<number>>>} Weights structure:
+         *   [layer][neuron][weight]
+         */
+        getWeights: function() {
             const weights = [];
 
-            // Save weights for each layer (skip layer 0 - input layer has no weights)
+            // Extract weights for each layer (skip layer 0 - input layer has no weights)
             for (let i = 1; i < layers.length; i++) {
                 const layerWeights = [];
 
-                // Save weights for each neuron
+                // Extract weights for each neuron in this layer
                 for (let j = 0; j < layers[i].neurons.length; j++) {
                     layerWeights.push(layers[i].neurons[j].weights);
                 }
@@ -232,8 +408,28 @@ const Network = function(size, activationMethod) {
                 weights.push(layerWeights);
             }
 
-            fs.writeFileSync(filepath, JSON.stringify(weights, null, 2));
-            console.log(`Weights saved to ${filepath}`);
+            return weights;
+        },
+
+        /**
+         * Set all network weights
+         *
+         * Loads weights into the network. Each neuron's weight array is replaced
+         * with the provided weights.
+         *
+         * @param {Array<Array<Array<number>>>} weights - Weights structure:
+         *   [layer][neuron][weight]
+         */
+        setWeights: function(weights) {
+            // Load weights for each layer (skip layer 0 - input layer has no weights)
+            for (let i = 1; i < layers.length; i++) {
+                const layerWeights = weights[i - 1]; // weights array starts at 0, layers start at 1
+
+                // Load weights for each neuron in this layer
+                for (let j = 0; j < layers[i].neurons.length; j++) {
+                    layers[i].neurons[j].weights = layerWeights[j];
+                }
+            }
         }
     }
 }
@@ -250,19 +446,53 @@ const PIXEL_MEAN = 0.1307; // Mean pixel value for MNIST
 const PIXEL_STD = 0.3081;  // Standard deviation for MNIST
 
 /**
- * Normalize pixel values using z-score normalization
- * Formula: (x - mean) / std
- * This centers the data around 0 and scales to unit variance
+ * Normalize pixel values using z-score normalization (standardization)
+ *
+ * Formula: x_norm = (x - μ) / σ
+ *
+ * Where:
+ *   - x = original pixel value [0, 1] (already divided by 255)
+ *   - μ = mean of all training set pixels (0.1307 for MNIST)
+ *   - σ = standard deviation of all training set pixels (0.3081 for MNIST)
+ *   - x_norm = normalized value (typically in range [-2, 2])
+ *
+ * Benefits:
+ *   - Centers data around 0 (zero mean)
+ *   - Scales to unit variance (σ = 1)
+ *   - Helps gradient descent converge faster
+ *   - Prevents numerical instability
+ *
+ * @param {Array<number>} pixels - Raw pixel values [0, 1]
+ * @returns {Array<number>} Normalized pixel values
  */
 const normalizedBuffer = new Array(784);
 function normalizePixels(pixels) {
-    for (let i = 0; i < pixels.length; i++) {
+    for (let i = 0; i < 784; i++) {
         normalizedBuffer[i] = (pixels[i] - PIXEL_MEAN) / PIXEL_STD;
     }
     return normalizedBuffer;
 }
 
-// Run the network
+/**
+ * Train network on a mini-batch of images
+ *
+ * This function implements mini-batch stochastic gradient descent (SGD):
+ *   1. Reset accumulated gradients
+ *   2. For each image in batch:
+ *      a. Forward pass: compute predictions
+ *      b. Compute loss
+ *      c. Backward pass: accumulate gradients
+ *   3. Update weights using averaged gradients
+ *
+ * Mini-batch SGD balances:
+ *   - Batch GD: slow but stable (uses all data)
+ *   - Online SGD: fast but noisy (uses one example)
+ *   - Mini-batch: good balance (uses small batches)
+ *
+ * @param {Object} network - Neural network instance
+ * @param {number} position - Batch index (multiplied by 10 for image positions)
+ * @returns {Object} Training metrics: {loss, accuracy, correct, total}
+ */
 const run = function(network, position) {
     // Load batch of 10 images from MNIST dataset
     let images = readMNIST(position*10, position*10+10);
@@ -270,35 +500,41 @@ const run = function(network, position) {
     let totalLoss = 0;
     let correctPredictions = 0;
 
-    // Reset gradient
+    // Reset accumulated gradients from previous batch
     network.resetGradient();
 
-    // Pre-allocate reusable arrays
-    const target = new Array(10).fill(0);
-    const error = new Array(10);
+    // Pre-allocate reusable arrays (performance optimization)
+    const target = new Array(10).fill(0);  // One-hot encoded label
+    const error = new Array(10);           // Error gradient
 
     // Process each image in the batch
-    images.forEach(function (image) {
-        // Reset and set one-hot encoded target vector
-        // Example: if label=3, target = [0,0,0,1,0,0,0,0,0,0]
+    for (let imgIdx = 0; imgIdx < images.length; imgIdx++) {
+        const image = images[imgIdx];
+
+        // ========== STEP 1: PREPARE TARGET (ONE-HOT ENCODING) ==========
+        // One-hot encoding converts label to vector
+        // Example: label=3 → [0,0,0,1,0,0,0,0,0,0]
+        // This represents the true probability distribution (100% for correct class)
         for (let i = 0; i < 10; i++) {
             target[i] = (i === image.label) ? 1 : 0;
         }
 
-        // ========== NORMALIZATION ==========
-        // Formula: x_normalized = (x - μ) / σ
-        // Where: μ = mean (0.1307), σ = std deviation (0.3081)
-        // This centers data around 0 and scales to unit variance
+        // ========== STEP 2: NORMALIZE INPUT ==========
+        // Z-score normalization: x_norm = (x - μ) / σ
+        // Centers data around 0 and scales to unit variance
         const normalizedPixels = normalizePixels(image.pixels);
 
-        // Run the batch
+        // ========== STEP 3: FORWARD PASS ==========
+        // Compute network output from input
         network.forward(normalizedPixels);
 
-        // Get the output with softmax
+        // Apply softmax to get probability distribution
+        // Softmax: p_i = exp(z_i) / Σ(exp(z_j)) for all j
+        // Converts raw scores (logits) to probabilities that sum to 1
         const output = network.output(softmax);
 
-        // Check if prediction is correct
-        // Prediction is the index with the highest probability
+        // ========== STEP 4: EVALUATE PREDICTION ==========
+        // Find predicted class (argmax of output probabilities)
         let maxValue = output[0];
         let predictedLabel = 0;
         for (let i = 1; i < output.length; i++) {
@@ -311,59 +547,104 @@ const run = function(network, position) {
             correctPredictions++;
         }
 
-        // Calculate Cross-Entropy Loss
+        // ========== STEP 5: COMPUTE LOSS ==========
+        // Cross-Entropy Loss measures difference between predicted and true distributions
         // Formula: L = -Σ(target[i] * log(output[i])) for i=0 to 9
-        // Since target is one-hot, this simplifies to: L = -log(output[correct_class])
+        // Since target is one-hot, only one term is non-zero:
+        //   L = -log(output[correct_class])
+        // Lower loss = better predictions
         totalLoss += crossEntropyLoss(output, target);
 
-        // OUTPUT LAYER GRADIENT
-        // Combined derivative of Softmax and Cross-Entropy Loss
-        // Formula: ∂L/∂z2[i] = output[i] - target[i]
-        // This is a beautiful simplification! When using softmax + cross-entropy together,
-        // the derivative is just (prediction - true_label)
+        // ========== STEP 6: COMPUTE OUTPUT GRADIENT ==========
+        // Combined derivative of Softmax + Cross-Entropy Loss
+        // Mathematical beauty: ∂L/∂z[i] = output[i] - target[i]
+        //
+        // Intuition:
+        //   - If output[i] > target[i]: gradient is positive → decrease z[i]
+        //   - If output[i] < target[i]: gradient is negative → increase z[i]
+        //   - Magnitude = how wrong the prediction is
+        //
+        // This is why softmax + cross-entropy are used together!
         for (let i = 0; i < output.length; i++) {
             error[i] = output[i] - target[i];
         }
 
-        // Calculate the gradient
+        // ========== STEP 7: BACKWARD PASS ==========
+        // Backpropagate error through network to compute weight gradients
+        // Gradients are accumulated (added) across all examples in batch
         network.gradient(error);
-    });
+    }
 
-    // Update weights after processing the batch
+    // ========== STEP 8: UPDATE WEIGHTS ==========
+    // Apply gradient descent with averaged gradients
+    // w = w - α * (1/m) * Σ(∇w)
     network.updateWeights(LEARNING_RATE, images.length);
 
-    // Return metrics
+    // Return performance metrics for this batch
     return {
-        loss: totalLoss / images.length,
-        accuracy: (correctPredictions / images.length) * 100,
-        correct: correctPredictions,
-        total: images.length
+        loss: totalLoss / images.length,              // Average loss
+        accuracy: (correctPredictions / images.length) * 100, // Percentage correct
+        correct: correctPredictions,                   // Number correct
+        total: images.length                           // Batch size
     };
 }
 
 const main = function() {
+    const filepath = './data.json';
+
     // Create the network
     const network = Network([784, 16, 16, 10], relu);
-    // Load weights in case exist
-    network.load('./data.json');
 
+    const totalBatches = 10000;
+
+    // Load saved state if it exists
+    let startBatch = 0;
+    if (fs.existsSync(filepath)) {
+        try {
+            const savedData = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+            network.setWeights(savedData.weights);
+            startBatch = savedData.batchIndex || 0;
+            console.log(`Loaded weights from ${filepath}`);
+            console.log(`Resuming from batch ${startBatch}`);
+
+            // Check if training is already complete
+            if (startBatch >= totalBatches) {
+                console.log('');
+                console.log('='.repeat(70));
+                console.log('TRAINING ALREADY COMPLETE');
+                console.log('='.repeat(70));
+                console.log(`All ${totalBatches} batches have been processed`);
+                console.log(`To restart training, delete ${filepath} or set batchIndex to 0`);
+                console.log('='.repeat(70));
+                return;
+            }
+        } catch (e) {
+            console.log(`Error loading saved data: ${e.message}`);
+            console.log(`Starting fresh with random initialization`);
+        }
+    } else {
+        console.log(`No saved data found at ${filepath}`);
+        console.log(`Starting with random initialization`);
+    }
+
+    console.log('');
     console.log('='.repeat(70));
     console.log('MNIST TRAINING');
     console.log('='.repeat(70));
     console.log(`Architecture: [784, 16, 16, 10]`);
     console.log(`Learning rate: ${LEARNING_RATE}`);
-    console.log(`Total batches: 1000`);
+    console.log(`Total batches: ${totalBatches}`);
     console.log(`Batch size: 10 images`);
+    console.log(`Starting batch: ${startBatch}`);
+    console.log(`Remaining batches: ${totalBatches - startBatch}`);
     console.log('='.repeat(70));
     console.log('');
-
-    const totalBatches = 1000;
     const reportInterval = 100; // Report every 100 batches
     let recentMetrics = [];
     let allMetrics = [];
     const startTime = Date.now();
 
-    for (let i = 0; i < totalBatches; i++) {
+    for (let i = startBatch; i < totalBatches; i++) {
         const batchStartTime = Date.now();
         const metrics = run(network, i);
         const batchTime = Date.now() - batchStartTime;
@@ -396,7 +677,12 @@ const main = function() {
 
         // Save every 500 batches
         if ((i + 1) % 500 === 0) {
-            network.save('./data.json');
+            const saveData = {
+                weights: network.getWeights(),
+                batchIndex: i + 1
+            };
+            fs.writeFileSync(filepath, JSON.stringify(saveData, null, 2));
+            console.log(`\nSaved progress at batch ${i + 1}`);
         }
     }
 
@@ -408,14 +694,19 @@ const main = function() {
     console.log('='.repeat(70));
     console.log('TRAINING COMPLETE');
     console.log('='.repeat(70));
-    console.log(`Total images processed: ${totalBatches * 10}`);
+    console.log(`Total images processed: ${(totalBatches - startBatch) * 10}`);
     console.log(`Total time: ${totalTime.toFixed(2)}s`);
-    console.log(`Average speed: ${(totalBatches * 10 / totalTime).toFixed(1)} images/second`);
+    console.log(`Average speed: ${((totalBatches - startBatch) * 10 / totalTime).toFixed(1)} images/second`);
     console.log(`Average batch time: ${avgBatchTime.toFixed(0)}ms`);
     console.log('='.repeat(70));
 
     // Final save
-    network.save('./data.json');
+    const saveData = {
+        weights: network.getWeights(),
+        batchIndex: totalBatches
+    };
+    fs.writeFileSync(filepath, JSON.stringify(saveData, null, 2));
+    console.log(`\nFinal weights saved to ${filepath}`);
 }
 
 main();
